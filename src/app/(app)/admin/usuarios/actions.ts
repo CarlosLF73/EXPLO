@@ -36,7 +36,7 @@ export async function invitarUsuario(email: string, nombre: string): Promise<Res
     const admin = createAdminClient();
     const { error } = await admin.auth.admin.inviteUserByEmail(correo, {
       data: { nombre: nombre.trim() || undefined },
-      redirectTo: `${await urlBase()}/cuenta/password?bienvenida=1`,
+      redirectTo: `${await urlBase()}/auth/aceptar?next=${encodeURIComponent("/cuenta/password?bienvenida=1")}`,
     });
     if (error) {
       return {
@@ -86,7 +86,7 @@ export async function enviarRecuperacion(email: string): Promise<Resultado> {
   try {
     await exigirAdmin();
     const { error } = await createAdminClient().auth.resetPasswordForEmail(email, {
-      redirectTo: `${await urlBase()}/cuenta/password`,
+      redirectTo: `${await urlBase()}/auth/aceptar?next=${encodeURIComponent("/cuenta/password")}`,
     });
     if (error) throw error;
     return { ok: true, mensaje: `Enlace para crear nueva contraseña enviado a ${email}.` };
