@@ -1,12 +1,16 @@
-import { Users } from "lucide-react";
-import { Proximamente } from "@/components/Proximamente";
+import { createClient } from "@/lib/supabase/server";
+import { ListaOperadores, type Operador } from "./ListaOperadores";
 
-export default function Page() {
-  return (
-    <Proximamente
-      titulo="Operadores"
-      icon={Users}
-      puntos={["Listado de operadores por delegación y producción", "Asistencia y disponibilidad diaria", "Análisis de coberturas, horas y productividad"]}
-    />
-  );
+export const dynamic = "force-dynamic";
+
+export default async function OperadoresPage() {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("operadores")
+    .select("id, nombre, apellidos, alias, telefono, email, sede_id, produccion_id, activo, notas")
+    .order("apellidos")
+    .returns<Operador[]>();
+
+  if (error) return <p className="card p-4 text-danger text-sm">No se han podido cargar los operadores: {error.message}</p>;
+  return <ListaOperadores operadores={data ?? []} />;
 }
