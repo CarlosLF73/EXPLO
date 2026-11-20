@@ -15,6 +15,8 @@ export type Operador = {
   apellidos: string | null;
   alias: string | null;
   telefono: string | null;
+  telefono_personal: string | null;
+  contrato: string | null;
   email: string | null;
   sede_id: string | null;
   produccion_id: string | null;
@@ -24,7 +26,7 @@ export type Operador = {
 
 type Edicion = Omit<Operador, "id"> & { id?: string };
 const NUEVO: Edicion = {
-  nombre: "", apellidos: "", alias: "", telefono: "", email: "", sede_id: "MAD", produccion_id: "L6", activo: true, notas: "",
+  nombre: "", apellidos: "", alias: "", telefono: "", telefono_personal: "", contrato: null, email: "", sede_id: "MAD", produccion_id: "L6", activo: true, notas: "",
 };
 
 const sinAcentos = (s: string) => s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
@@ -35,6 +37,7 @@ export function ListaOperadores({ operadores }: { operadores: Operador[] }) {
   const router = useRouter();
   const [prod, setProd] = useState<"todos" | "A3" | "L6">("todos");
   const [verBajas, setVerBajas] = useState(false);
+  const [soloFdi, setSoloFdi] = useState(false);
   const [q, setQ] = useState("");
   const [edit, setEdit] = useState<Edicion | null>(null);
   const [guardando, setGuardando] = useState(false);
@@ -44,10 +47,11 @@ export function ListaOperadores({ operadores }: { operadores: Operador[] }) {
     const t = sinAcentos(q.trim());
     return operadores.filter((o) =>
       (verBajas ? !o.activo : o.activo) &&
+      (!soloFdi || o.contrato === "FDI") &&
       (prod === "todos" || o.produccion_id === prod) &&
-      (!t || sinAcentos(`${o.nombre} ${o.apellidos ?? ""} ${o.alias ?? ""} ${o.telefono ?? ""}`).includes(t)),
+      (!t || sinAcentos(`${o.nombre} ${o.apellidos ?? ""} ${o.alias ?? ""} ${o.telefono ?? ""} ${o.telefono_personal ?? ""}`).includes(t)),
     );
-  }, [operadores, prod, q, verBajas]);
+  }, [operadores, prod, q, verBajas, soloFdi]);
 
   const activos = operadores.filter((o) => o.activo);
   const n = (p: string) => activos.filter((o) => o.produccion_id === p).length;
@@ -63,6 +67,8 @@ export function ListaOperadores({ operadores }: { operadores: Operador[] }) {
       apellidos: edit.apellidos?.trim() || null,
       alias: edit.alias?.trim() || null,
       telefono: edit.telefono?.trim() || null,
+      telefono_personal: edit.telefono_personal?.trim() || null,
+      contrato: edit.contrato || null,
       email: edit.email?.trim() || null,
       sede_id: edit.sede_id,
       produccion_id: edit.produccion_id,
@@ -99,6 +105,10 @@ export function ListaOperadores({ operadores }: { operadores: Operador[] }) {
         />
         <Buscador valor={q} onChange={setQ} placeholder="Buscar por nombre, alias o teléfono" />
         <label className="flex items-center gap-2 text-sm text-muted cursor-pointer select-none">
+          <input type="checkbox" className="size-4" checked={soloFdi} onChange={(e) => setSoloFdi(e.target.checked)} />
+          Solo FDI ({activos.filter((o) => o.contrato === "FDI").length})
+        </label>
+        <label className="flex items-center gap-2 text-sm text-muted cursor-pointer select-none">
           <input type="checkbox" className="size-4" checked={verBajas} onChange={(e) => setVerBajas(e.target.checked)} />
           Ver bajas
         </label>
@@ -123,11 +133,13 @@ export function ListaOperadores({ operadores }: { operadores: Operador[] }) {
                   </p>
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
                     {p && <Insignia color={p.color}>{p.id}</Insignia>}
+                    {o.contrato === "FDI" && <Insignia color="#d97706">FDI</Insignia>}
                     <span className="text-muted">{nombreSede(o.sede_id)}</span>
-                    {o.telefono ? (
-                      <a href={`tel:${o.telefono.split("/")[0].replace(/\s/g, "")}`}
+                    {o.telefono || o.telefono_personal ? (
+                      <a href={`tel:${(o.telefono ?? o.telefono_personal ?? "").split("/")[0].replace(/\s/g, "")}`}
                         className="inline-flex items-center gap-1 text-accent font-medium hover:underline">
-                        <Phone size={13} /> {o.telefono}
+                        <Phone size={13} /> {o.telefono ?? o.telefono_personal}
+                        {!o.telefono && <span className="text-[11px] font-normal text-muted">(personal)</span>}
                       </a>
                     ) : (
                       <span className="text-muted text-xs">Sin teléfono</span>
@@ -168,9 +180,21 @@ export function ListaOperadores({ operadores }: { operadores: Operador[] }) {
           <Campo label="Apellidos">
             <input className="input" value={edit.apellidos ?? ""} onChange={(e) => setEdit({ ...edit, apellidos: e.target.value })} />
           </Campo>
-          <Campo label="Teléfono del trabajo">
-            <input className="input" inputMode="tel" placeholder="600 000 000 / 1234" value={edit.telefono ?? ""}
-              onChange={(e) => setEdit({ ...edit, telefono: e.target.value })} />
+          <div className="grid grid-cols-2 gap-3">
+            <Campo label="Teléfono de empresa">
+              <input className="input" inputMode="tel" placeholder="600 000 000 / 1234" value={edit.telefono ?? ""}
+                onChange={(e) => setEdit({ ...edit, telefono: e.target.value })} />
+            </Campo>
+            <Campo label="Teléfono personal">
+              <input className="input" inputMode="tel" placeholder="Si no tiene de empresa" value={edit.telefono_personal ?? ""}
+                onChange={(e) => setEdit({ ...edit, telefono_personal: e.target.value })} />
+            </Campo>
+          </div>
+          <Campo label="Contrato">
+            <select className="input" value={edit.contrato ?? ""} onChange={(e) => setEdit({ ...edit, contrato: e.target.value || null })}>
+              <option value="">Plantilla / otro</option>
+              <option value="FDI">FDI</option>
+            </select>
           </Campo>
           <div className="grid grid-cols-2 gap-3">
             <Campo label="Producción">

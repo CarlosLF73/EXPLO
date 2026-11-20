@@ -7,7 +7,7 @@ export default async function OperadoresPage() {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("operadores")
-    .select("id, nombre, apellidos, alias, telefono, email, sede_id, produccion_id, activo, notas")
+    .select("id, nombre, apellidos, alias, telefono, telefono_personal, contrato, email, sede_id, produccion_id, activo, notas")
     .order("apellidos")
     .returns<Operador[]>();
 
