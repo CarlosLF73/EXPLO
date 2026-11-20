@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Phone, Plus, Pencil, UserX, UserCheck } from "lucide-react";
+import { Phone, Plus, Pencil, UserX, UserCheck, ShieldCheck } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Aviso } from "@/components/PantallaAcceso";
 import {
@@ -33,7 +33,10 @@ const sinAcentos = (s: string) => s.normalize("NFD").replace(/\p{Diacritic}/gu, 
 const iniciales = (o: Operador) =>
   ((o.nombre?.[0] ?? "") + (o.apellidos?.[0] ?? "")).toUpperCase();
 
-export function ListaOperadores({ operadores }: { operadores: Operador[] }) {
+type Privado = { dni: string; dni_caducidad: string; direccion: string; comprobado_el: string; a_revisar: boolean; notas: string };
+const PRIV_VACIO: Privado = { dni: "", dni_caducidad: "", direccion: "", comprobado_el: "", a_revisar: false, notas: "" };
+
+export function ListaOperadores({ operadores, esAdmin }: { operadores: Operador[]; esAdmin: boolean }) {
   const router = useRouter();
   const [prod, setProd] = useState<"todos" | "A3" | "L6">("todos");
   const [verBajas, setVerBajas] = useState(false);
@@ -42,6 +45,21 @@ export function ListaOperadores({ operadores }: { operadores: Operador[] }) {
   const [edit, setEdit] = useState<Edicion | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [priv, setPriv] = useState<Privado | null>(null);
+  const [privOriginal, setPrivOriginal] = useState<string>("");
+
+  // Datos privados: solo el administrador (la base de datos no los devuelve a otros usuarios)
+  useEffect(() => {
+    setPriv(null);
+    if (!esAdmin || !edit?.id) return;
+    createClient().from("operador_datos_privados")
+      .select("dni, dni_caducidad, direccion, comprobado_el, a_revisar, notas").eq("operador_id", edit.id).maybeSingle()
+      .then(({ data }) => {
+        const p = { ...PRIV_VACIO, ...Object.fromEntries(Object.entries(data ?? {}).map(([k, v]) => [k, v ?? (k === "a_revisar" ? false : "")])) } as Privado;
+        setPriv(p);
+        setPrivOriginal(JSON.stringify(p));
+      });
+  }, [esAdmin, edit?.id]);
 
   const visibles = useMemo(() => {
     const t = sinAcentos(q.trim());
@@ -79,6 +97,18 @@ export function ListaOperadores({ operadores }: { operadores: Operador[] }) {
     const { error } = edit.id
       ? await supabase.from("operadores").update(datos).eq("id", edit.id)
       : await supabase.from("operadores").insert(datos);
+    if (!error && esAdmin && edit.id && priv && JSON.stringify(priv) !== privOriginal) {
+      const { error: e2 } = await supabase.from("operador_datos_privados").upsert({
+        operador_id: edit.id,
+        dni: priv.dni.trim() || null,
+        dni_caducidad: priv.dni_caducidad || null,
+        direccion: priv.direccion.trim() || null,
+        comprobado_el: priv.comprobado_el || null,
+        a_revisar: priv.a_revisar,
+        notas: priv.notas.trim() || null,
+      });
+      if (e2) { setGuardando(false); return setError(`Datos generales guardados, pero no los privados: ${e2.message}`); }
+    }
     setGuardando(false);
     if (error) return setError(`No se ha podido guardar: ${error.message}`);
     setEdit(null);
@@ -208,6 +238,36 @@ export function ListaOperadores({ operadores }: { operadores: Operador[] }) {
               </select>
             </Campo>
           </div>
+          {esAdmin && edit.id && priv && (
+            <fieldset className="card p-4 space-y-3" style={{ borderColor: "color-mix(in srgb, var(--accent) 40%, var(--border))" }}>
+              <legend className="px-1 text-sm font-semibold flex items-center gap-1.5">
+                <ShieldCheck size={15} className="text-accent" /> Datos privados · solo administrador
+              </legend>
+              <div className="grid grid-cols-2 gap-3">
+                <Campo label="DNI / NIE">
+                  <input className="input uppercase" value={priv.dni} onChange={(e) => setPriv({ ...priv, dni: e.target.value })} />
+                </Campo>
+                <Campo label="Caducidad DNI">
+                  <input type="date" className="input" value={priv.dni_caducidad} onChange={(e) => setPriv({ ...priv, dni_caducidad: e.target.value })} />
+                </Campo>
+              </div>
+              <Campo label="Dirección">
+                <textarea className="input !h-20 py-2" value={priv.direccion} onChange={(e) => setPriv({ ...priv, direccion: e.target.value })} />
+              </Campo>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-muted">Comprobada: {priv.comprobado_el ? new Date(priv.comprobado_el + "T12:00:00").toLocaleDateString("es-ES") : "nunca"}</span>
+                <button type="button" className="btn btn-ghost !min-h-8 !text-xs"
+                  onClick={() => setPriv({ ...priv, comprobado_el: new Date().toISOString().slice(0, 10), a_revisar: false })}>
+                  Marcar comprobada hoy
+                </button>
+                <label className="flex items-center gap-1.5 ml-auto">
+                  <input type="checkbox" className="size-4" checked={priv.a_revisar} onChange={(e) => setPriv({ ...priv, a_revisar: e.target.checked })} />
+                  A revisar
+                </label>
+              </div>
+              {priv.notas && <p className="text-xs text-warn">{priv.notas}</p>}
+            </fieldset>
+          )}
           <Campo label="Notas">
             <textarea className="input !h-24 py-2" value={edit.notas ?? ""} onChange={(e) => setEdit({ ...edit, notas: e.target.value })} />
           </Campo>

@@ -2,13 +2,15 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Fuel, Gauge, Wrench, Plus } from "lucide-react";
+import { Fuel, Gauge, Wrench, Plus, UserRound, KeyRound } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Aviso } from "@/components/PantallaAcceso";
 import {
   Buscador, Cabecera, Campo, Insignia, Modal, PRODUCCIONES, SEDES, Segmentos, Vacio, nombreSede, prodInfo,
 } from "@/components/ui";
 
+export type OperadorMin = { id: string; nombre: string; apellidos: string | null; produccion_id: string | null };
+type Asignacion = { id: string; desde: string; hasta: string | null; operador: { id: string; nombre: string; apellidos: string | null } | null };
 type Evento = { id: string; tipo: string; fecha: string; descripcion: string | null; estado: string };
 export type Vehiculo = {
   id: string;
@@ -27,6 +29,7 @@ export type Vehiculo = {
   vehiculo_km: { km: number; fecha: string }[];
   vehiculo_tarjetas: { hasta: string | null; tarjeta: { alias: string; emisor: string; ultimos_digitos: string | null; estado: string } | null }[];
   vehiculo_eventos: Evento[];
+  vehiculo_asignaciones: Asignacion[];
 };
 
 const TIPOS: Record<string, { label: string; color: string }> = {
@@ -53,8 +56,10 @@ const kmActual = (v: Vehiculo) =>
   [...v.vehiculo_km].sort((a, b) => b.fecha.localeCompare(a.fecha) || b.km - a.km)[0]?.km ?? null;
 const tarjetaActual = (v: Vehiculo) => v.vehiculo_tarjetas.find((t) => !t.hasta)?.tarjeta ?? null;
 const hoy = () => new Date().toISOString().slice(0, 10);
+const adjudicacionActual = (v: Vehiculo) => v.vehiculo_asignaciones.find((a) => !a.hasta) ?? null;
+const nombreOp = (o: { nombre: string; apellidos: string | null } | null) => (o ? `${o.nombre} ${o.apellidos ?? ""}`.trim() : "—");
 
-export function ListaFlota({ vehiculos, sedeInicial, prodInicial }: { vehiculos: Vehiculo[]; sedeInicial: string; prodInicial: string }) {
+export function ListaFlota({ vehiculos, operadores, sedeInicial, prodInicial }: { vehiculos: Vehiculo[]; operadores: OperadorMin[]; sedeInicial: string; prodInicial: string }) {
   const router = useRouter();
   const [sede, setSede] = useState(sedeInicial);
   const [prod, setProd] = useState(prodInicial);
@@ -64,6 +69,7 @@ export function ListaFlota({ vehiculos, sedeInicial, prodInicial }: { vehiculos:
   const [km, setKm] = useState("");
   const [nuevo, setNuevo] = useState({ tipo: "incidencia", fecha: hoy(), descripcion: "" });
   const [guardando, setGuardando] = useState(false);
+  const [adj, setAdj] = useState({ operador: "", desde: hoy() });
   const [aviso, setAviso] = useState<{ ok: boolean; m: string } | null>(null);
 
   const visibles = useMemo(() => {
@@ -81,7 +87,30 @@ export function ListaFlota({ vehiculos, sedeInicial, prodInicial }: { vehiculos:
     setEstado(v.estado);
     setKm("");
     setNuevo({ tipo: "incidencia", fecha: hoy(), descripcion: "" });
+    setAdj({ operador: "", desde: hoy() });
     setAviso(null);
+  }
+
+  /** Cierra la adjudicación vigente y, si se indica, abre otra nueva. */
+  async function adjudicar(quitar = false) {
+    if (!sel) return;
+    if (!quitar && !adj.operador) return setAviso({ ok: false, m: "Elige un operador." });
+    setGuardando(true);
+    setAviso(null);
+    const supabase = createClient();
+    const actual = adjudicacionActual(sel);
+    const fecha = quitar ? hoy() : adj.desde;
+    if (actual) {
+      const { error } = await supabase.from("vehiculo_asignaciones").update({ hasta: fecha }).eq("id", actual.id);
+      if (error) { setGuardando(false); return setAviso({ ok: false, m: error.message }); }
+    }
+    if (!quitar) {
+      const { error } = await supabase.from("vehiculo_asignaciones").insert({ vehiculo_id: sel.id, operador_id: adj.operador, desde: adj.desde });
+      if (error) { setGuardando(false); return setAviso({ ok: false, m: error.message }); }
+    }
+    setGuardando(false);
+    setSel(null);
+    router.refresh();
   }
 
   async function guardar() {
@@ -115,7 +144,7 @@ export function ListaFlota({ vehiculos, sedeInicial, prodInicial }: { vehiculos:
 
   return (
     <div className="space-y-5">
-      <Cabecera titulo="Flota" sub={`${visibles.length} vehículos`} />
+      <Cabecera titulo="Flota" sub={`${visibles.length} vehículos · ${vehiculos.filter((v) => adjudicacionActual(v)).length} adjudicados`} />
 
       <div className="flex flex-wrap gap-3 items-center">
         <Segmentos etiqueta="Producción" valor={prod} onChange={setProd} opciones={[
@@ -157,6 +186,12 @@ export function ListaFlota({ vehiculos, sedeInicial, prodInicial }: { vehiculos:
                     <span className="flex items-center gap-1.5 text-muted"><Fuel size={15} />
                       {t ? <b className="text-text">···{t.ultimos_digitos}</b> : "Sin tarjeta"}</span>
                   </div>
+                  <p className="mt-2 flex items-center gap-1.5 text-sm truncate">
+                    <UserRound size={15} className="text-muted shrink-0" />
+                    {adjudicacionActual(v)?.operador
+                      ? <span className="font-medium truncate">{nombreOp(adjudicacionActual(v)!.operador)}</span>
+                      : <span className="text-muted">Sin adjudicar</span>}
+                  </p>
                   <div className="mt-3 flex flex-wrap items-center gap-1.5">
                     {p && <Insignia color={p.color}>{p.id}</Insignia>}
                     <span className="text-xs text-muted">{nombreSede(v.sede_id)}</span>
@@ -189,6 +224,46 @@ export function ListaFlota({ vehiculos, sedeInicial, prodInicial }: { vehiculos:
             <dt className="text-muted">Telepeaje</dt><dd className="font-semibold">{sel.telepeaje ?? "—"}</dd>
             <dt className="text-muted">Kilómetros</dt><dd className="font-semibold">{kmActual(sel)?.toLocaleString("es-ES") ?? "—"}</dd>
           </dl>
+
+          <fieldset className="card p-4 space-y-3">
+            <legend className="px-1 text-sm font-semibold flex items-center gap-1.5"><KeyRound size={15} /> Adjudicación</legend>
+            <p className="text-sm">
+              {adjudicacionActual(sel)
+                ? <>Adjudicado a <b>{nombreOp(adjudicacionActual(sel)!.operador)}</b> desde {fecha(adjudicacionActual(sel)!.desde)}</>
+                : <span className="text-muted">Sin adjudicar</span>}
+            </p>
+            <div className="grid grid-cols-[1fr_auto] gap-2">
+              <select className="input" value={adj.operador} onChange={(e) => setAdj({ ...adj, operador: e.target.value })} aria-label="Operador">
+                <option value="">Adjudicar a…</option>
+                {PRODUCCIONES.map((p) => (
+                  <optgroup key={p.id} label={p.nombre}>
+                    {operadores.filter((o) => o.produccion_id === p.id).map((o) => (
+                      <option key={o.id} value={o.id}>{o.nombre} {o.apellidos}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <input type="date" className="input !w-40" value={adj.desde} onChange={(e) => setAdj({ ...adj, desde: e.target.value })} aria-label="Desde" />
+            </div>
+            <div className="flex gap-2">
+              <button type="button" className="btn btn-primary flex-1" disabled={guardando || !adj.operador} onClick={() => adjudicar(false)}>
+                {adjudicacionActual(sel) ? "Cambiar adjudicación" : "Adjudicar"}
+              </button>
+              {adjudicacionActual(sel) && (
+                <button type="button" className="btn btn-ghost" disabled={guardando} onClick={() => adjudicar(true)}>Quitar</button>
+              )}
+            </div>
+            {sel.vehiculo_asignaciones.some((a) => a.hasta) && (
+              <details className="text-sm">
+                <summary className="cursor-pointer text-muted">Adjudicaciones anteriores</summary>
+                <ul className="mt-2 space-y-1">
+                  {[...sel.vehiculo_asignaciones].filter((a) => a.hasta).sort((a, b) => b.desde.localeCompare(a.desde)).map((a) => (
+                    <li key={a.id}>{nombreOp(a.operador)} · {fecha(a.desde)} → {fecha(a.hasta!)}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </fieldset>
 
           <div className="grid grid-cols-2 gap-3">
             <Campo label="Estado">
