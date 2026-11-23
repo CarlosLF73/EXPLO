@@ -11,11 +11,11 @@ export default async function MultasPage() {
 
   const [multas, vehiculos, operadores, docs, ajustes, privados] = await Promise.all([
     supabase.from("multas")
-      .select(`*, vehiculo:vehiculos(id, codigo, matricula, marca, modelo),
+      .select(`*, vehiculo:vehiculos(id, codigo, matricula, marca, modelo, sede_id, produccion_id),
         operador:operadores(id, nombre, apellidos, telefono, telefono_personal, email)`)
       .order("created_at", { ascending: false })
       .returns<Multa[]>(),
-    supabase.from("vehiculos").select("id, codigo, matricula, marca, modelo").neq("estado", "baja").order("codigo").returns<VehMin[]>(),
+    supabase.from("vehiculos").select("id, codigo, matricula, marca, modelo, sede_id, produccion_id").neq("estado", "baja").order("codigo").returns<VehMin[]>(),
     supabase.from("operadores").select("id, nombre, apellidos, produccion_id, email").eq("activo", true).order("nombre").returns<OpMin[]>(),
     supabase.from("documentos").select("id, entidad_id, tipo, nombre_archivo, storage_path, created_at").eq("entidad", "multa").returns<Doc[]>(),
     supabase.from("ajustes").select("valor").eq("clave", "multas_contactos").maybeSingle<{ valor: Contactos }>(),

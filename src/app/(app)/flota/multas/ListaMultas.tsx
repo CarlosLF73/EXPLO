@@ -3,15 +3,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Plus, FileText, Mail, UserCheck, Wallet, CheckCircle2, Settings2, AlertTriangle, ShieldCheck, Ban, FileDown, Hand, Sparkles,
+  Plus, FileText, Mail, UserCheck, Wallet, CheckCircle2, Settings2, AlertTriangle, ShieldCheck, Ban, FileDown, Hand, Sparkles, Pencil, Undo2, Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { generarPdfMulta } from "@/lib/pdfMulta";
 import { Aviso } from "@/components/PantallaAcceso";
-import { Buscador, Cabecera, Campo, Insignia, Modal, PRODUCCIONES, Segmentos, Vacio } from "@/components/ui";
+import { Buscador, Cabecera, Campo, Insignia, Modal, PRODUCCIONES, Segmentos, Vacio, nombreSede, prodInfo } from "@/components/ui";
 
 // ---------------------------------------------------------------- tipos
-export type VehMin = { id: string; codigo: string | null; matricula: string; marca: string | null; modelo: string | null };
+export type VehMin = {
+  id: string; codigo: string | null; matricula: string; marca: string | null; modelo: string | null;
+  sede_id?: string | null; produccion_id?: string | null;
+};
 export type OpMin = { id: string; nombre: string; apellidos: string | null; produccion_id: string | null; email: string | null };
 export type Doc = { id: string; entidad_id: string; tipo: string; nombre_archivo: string | null; storage_path: string; created_at: string };
 export type Privado = {
@@ -101,6 +104,7 @@ export function ListaMultas({
   const [nueva, setNueva] = useState(false);
   const [sel, setSel] = useState<Multa | null>(null);
   const [verContactos, setVerContactos] = useState(false);
+  const [editar, setEditar] = useState<Multa | null>(null);
 
   const visibles = useMemo(() => {
     const t = sinAcentos(q.trim());
@@ -166,6 +170,14 @@ export function ListaMultas({
                       <span className="text-sm text-muted">{PASOS[paso]?.label}</span>
                     )}
                     <span className="font-mono text-sm font-bold border-2 border-text/80 rounded px-1.5">{m.vehiculo?.matricula ?? m.matricula ?? "—"}</span>
+                    {m.vehiculo && (
+                      <span className="flex items-center gap-1.5 text-xs">
+                        {prodInfo(m.vehiculo.produccion_id ?? null) && (
+                          <Insignia color={prodInfo(m.vehiculo.produccion_id ?? null)!.color}>{m.vehiculo.produccion_id}</Insignia>
+                        )}
+                        <span className="text-muted">{nombreSede(m.vehiculo.sede_id ?? null)}</span>
+                      </span>
+                    )}
                   </div>
                   <div className="min-w-0">
                     <p className="font-semibold truncate">
@@ -193,11 +205,13 @@ export function ListaMultas({
       )}
 
       {nueva && <NuevaMulta vehiculos={vehiculos} onClose={() => setNueva(false)} onGuardada={() => { setNueva(false); router.refresh(); }} />}
+      {editar && <NuevaMulta multa={editar} vehiculos={vehiculos} onClose={() => setEditar(null)} onGuardada={() => { setEditar(null); router.refresh(); }} />}
       {sel && (
         <FichaMulta
           multa={sel} operadores={operadores} docs={docs.filter((d) => d.entidad_id === sel.id)} contactos={contactos}
           privados={privados} esAdmin={esAdmin} miNombre={miNombre}
           onClose={() => setSel(null)} onCambio={() => { setSel(null); router.refresh(); }}
+          onEditar={() => { setEditar(sel); setSel(null); }}
         />
       )}
       {verContactos && <EditarContactos contactos={contactos} onClose={() => setVerContactos(false)} onGuardado={() => { setVerContactos(false); router.refresh(); }} />}
@@ -219,15 +233,25 @@ async function subirDocumento(multaId: string, archivo: File, tipo: "multa" | "j
 }
 
 // ================================================================ nueva multa
-function NuevaMulta({ vehiculos, onClose, onGuardada }: { vehiculos: VehMin[]; onClose: () => void; onGuardada: () => void }) {
-  const [f, setF] = useState({
+function NuevaMulta({ multa, vehiculos, onClose, onGuardada }: {
+  multa?: Multa; vehiculos: VehMin[]; onClose: () => void; onGuardada: () => void;
+}) {
+  const fi = multa?.fecha_infraccion ? new Date(multa.fecha_infraccion) : null;
+  const [f, setF] = useState(multa ? {
+    matricula: multa.vehiculo?.matricula ?? multa.matricula ?? "",
+    fecha: fi ? fi.toLocaleDateString("sv-SE") : "",
+    hora: fi ? fi.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "",
+    lugar: multa.lugar ?? "", organismo: multa.organismo ?? "", expediente: multa.expediente ?? "",
+    importe: multa.importe != null ? String(multa.importe).replace(".", ",") : "", puntos: multa.puntos != null ? String(multa.puntos) : "",
+    origen: multa.origen ?? "otro", notificacion: multa.fecha_notificacion ?? "", plazo: multa.plazo_identificacion ?? "", notas: multa.notas ?? "",
+  } : {
     matricula: "", fecha: "", hora: "", lugar: "", organismo: "", expediente: "", importe: "", puntos: "",
     origen: "pyramid", notificacion: hoy(), plazo: masDias(hoy(), 20), notas: "",
   });
   const [archivo, setArchivo] = useState<File | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [modo, setModo] = useState<"correo" | "pdf" | "manual">("correo");
+  const [modo, setModo] = useState<"correo" | "pdf" | "manual">(multa ? "manual" : "correo");
   const [textoCorreo, setTextoCorreo] = useState("");
   const [leyendo, setLeyendo] = useState(false);
   const [leido, setLeido] = useState<{ ok: boolean; m: string } | null>(null);
@@ -277,7 +301,7 @@ function NuevaMulta({ vehiculos, onClose, onGuardada }: { vehiculos: VehMin[]; o
     setGuardando(true);
     const supabase = createClient();
     const momento = new Date(`${f.fecha}T${f.hora || "12:00"}:00`).toISOString();
-    const { data, error } = await supabase.from("multas").insert({
+    const datos = {
       vehiculo_id: veh?.id ?? null,
       matricula: f.matricula.replace(/\s/g, "").toUpperCase(),
       fecha_infraccion: momento,
@@ -285,7 +309,10 @@ function NuevaMulta({ vehiculos, onClose, onGuardada }: { vehiculos: VehMin[]; o
       importe: f.importe ? Number(f.importe.replace(",", ".")) : null, puntos: f.puntos ? Number(f.puntos) : null,
       origen: f.origen, fecha_notificacion: f.notificacion || null, plazo_identificacion: f.plazo || null,
       notas: [f.notas.trim(), modo === "correo" && textoCorreo.trim() ? `Correo original:\n${textoCorreo.trim().slice(0, 4000)}` : ""].filter(Boolean).join("\n\n") || null,
-    }).select("id").single();
+    };
+    const { data, error } = multa
+      ? await supabase.from("multas").update(datos).eq("id", multa.id).select("id").single()
+      : await supabase.from("multas").insert(datos).select("id").single();
     if (error || !data) { setGuardando(false); return setError(`No se ha podido guardar: ${error?.message}`); }
     try {
       if (archivo) await subirDocumento(data.id, archivo, "multa");
@@ -297,7 +324,7 @@ function NuevaMulta({ vehiculos, onClose, onGuardada }: { vehiculos: VehMin[]; o
   }
 
   return (
-    <Modal titulo="Nueva multa" onClose={onClose} pie={<>
+    <Modal titulo={multa ? "Editar multa" : "Nueva multa"} onClose={onClose} pie={<>
       <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
       <button className="btn btn-primary" onClick={guardar} disabled={guardando}>{guardando ? "Guardando…" : "Guardar"}</button>
     </>}>
@@ -378,10 +405,10 @@ function NuevaMulta({ vehiculos, onClose, onGuardada }: { vehiculos: VehMin[]; o
 
 // ================================================================ ficha de multa
 function FichaMulta({
-  multa: m, operadores, docs, contactos, privados, esAdmin, miNombre, onClose, onCambio,
+  multa: m, operadores, docs, contactos, privados, esAdmin, miNombre, onClose, onCambio, onEditar,
 }: {
   multa: Multa; operadores: OpMin[]; docs: Doc[]; contactos: Contactos; privados: Privado[];
-  esAdmin: boolean; miNombre: string; onClose: () => void; onCambio: () => void;
+  esAdmin: boolean; miNombre: string; onClose: () => void; onCambio: () => void; onEditar: () => void;
 }) {
   const [sugerido, setSugerido] = useState<{ operador_id: string; origen: string } | null>(null);
   const [conductor, setConductor] = useState(m.operador_id ?? "");
@@ -508,6 +535,36 @@ function FichaMulta({
     await actualizar({ estado: "pagada", fecha_pago: pago.fecha }, "Pago registrado.");
   }
 
+  /** Vuelve la multa al paso anterior y limpia los datos de ese paso. */
+  function deshacer() {
+    const previo = (): Multa["estado"] => {
+      if (m.estado === "identificado") return "recibida";
+      if (m.estado === "comunicada") return "identificado";
+      if (m.estado === "pagada") return "comunicada";
+      if (m.fecha_pago) return "pagada";
+      if (m.fecha_comunicada) return "comunicada";
+      return m.operador_id ? "identificado" : "recibida";
+    };
+    const a = previo();
+    const cambios: Partial<Multa> = { estado: a, fecha_cierre: null };
+    if (a === "recibida") Object.assign(cambios, { operador_id: null, conductor_origen: null, fecha_identificado: null });
+    if (a === "identificado") Object.assign(cambios, { via: null, fecha_comunicada: null, medio_comunicacion: null, nota_comunicacion: null });
+    if (a === "comunicada") Object.assign(cambios, { fecha_pago: null });
+    actualizar(cambios, `Multa devuelta a «${PASOS.find((p) => p.id === a)?.label}».`);
+  }
+
+  /** Borra la multa, sus documentos y los archivos guardados (solo administrador). */
+  async function eliminar() {
+    setOcupado(true);
+    setAviso(null);
+    if (docs.length) await supabase.storage.from("documentos").remove(docs.map((d) => d.storage_path));
+    await supabase.from("documentos").delete().eq("entidad", "multa").eq("entidad_id", m.id);
+    const { error } = await supabase.from("multas").delete().eq("id", m.id);
+    setOcupado(false);
+    if (error) return setAviso({ ok: false, m: `No se ha podido eliminar: ${error.message}` });
+    onCambio();
+  }
+
   const paso = PASOS.findIndex((p) => p.id === m.estado);
 
   return (
@@ -524,6 +581,17 @@ function FichaMulta({
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm card p-4 bg-surface-2">
         <dt className="text-muted">Vehículo</dt><dd className="font-semibold">{m.vehiculo ? `${m.vehiculo.codigo} · ${matricula}` : matricula}</dd>
+        <dt className="text-muted">Delegación</dt>
+        <dd className="font-semibold flex items-center gap-1.5">
+          {m.vehiculo ? (
+            <>
+              {prodInfo(m.vehiculo.produccion_id ?? null) && (
+                <Insignia color={prodInfo(m.vehiculo.produccion_id ?? null)!.color}>{prodInfo(m.vehiculo.produccion_id ?? null)!.nombre}</Insignia>
+              )}
+              {nombreSede(m.vehiculo.sede_id ?? null)}
+            </>
+          ) : "Vehículo fuera de la flota"}
+        </dd>
         <dt className="text-muted">Infracción</dt><dd className="font-semibold">{fechaHora(m.fecha_infraccion)}</dd>
         <dt className="text-muted">Lugar</dt><dd className="font-semibold">{m.lugar ?? "—"}</dd>
         <dt className="text-muted">Organismo</dt><dd className="font-semibold">{m.organismo ?? "—"}</dd>
@@ -660,12 +728,29 @@ function FichaMulta({
 
       {m.estado === "cerrada" && <Aviso tipo="ok">Cerrada el {fecha(m.fecha_cierre)}.</Aviso>}
 
-      {!["cerrada", "anulada"].includes(m.estado) && (
-        <button className="text-sm text-muted hover:text-danger flex items-center gap-1.5" disabled={ocupado}
-          onClick={() => { if (confirm("¿Anular esta multa? (recurrida, duplicada, no corresponde…)")) actualizar({ estado: "anulada", fecha_cierre: hoy() }, "Multa anulada."); }}>
-          <Ban size={14} /> Anular multa
+      <div className="flex flex-wrap gap-2 pt-2 border-t border-border">
+        <button className="btn btn-ghost !min-h-9 text-sm" disabled={ocupado} onClick={onEditar}>
+          <Pencil size={15} /> Editar datos
         </button>
-      )}
+        {m.estado !== "recibida" && (
+          <button className="btn btn-ghost !min-h-9 text-sm" disabled={ocupado}
+            onClick={() => { if (confirm("¿Deshacer el último paso de esta multa?")) deshacer(); }}>
+            <Undo2 size={15} /> Deshacer último paso
+          </button>
+        )}
+        {!["cerrada", "anulada"].includes(m.estado) && (
+          <button className="btn btn-ghost !min-h-9 text-sm" disabled={ocupado}
+            onClick={() => { if (confirm("¿Anular esta multa? (recurrida, duplicada, no corresponde…). Se conserva en el historial.")) actualizar({ estado: "anulada", fecha_cierre: hoy() }, "Multa anulada."); }}>
+            <Ban size={15} /> Anular
+          </button>
+        )}
+        {esAdmin && (
+          <button className="btn btn-ghost !min-h-9 text-sm ml-auto" style={{ color: "var(--danger)" }} disabled={ocupado}
+            onClick={() => { if (confirm("¿Eliminar definitivamente esta multa y sus documentos? No se puede deshacer. Si solo no procede, mejor «Anular».")) eliminar(); }}>
+            <Trash2 size={15} /> Eliminar
+          </button>
+        )}
+      </div>
 
       {aviso && <Aviso tipo={aviso.ok ? "ok" : "error"}>{aviso.m}</Aviso>}
     </Modal>
