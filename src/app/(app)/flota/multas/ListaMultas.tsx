@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Plus, FileText, Mail, UserCheck, Wallet, CheckCircle2, Settings2, AlertTriangle, ShieldCheck, Ban, FileDown, Hand, Sparkles, Pencil, Undo2, Trash2,
+  Plus, FileText, Mail, UserCheck, Wallet, CheckCircle2, Settings2, AlertTriangle, ShieldCheck, Ban, FileDown, Sparkles, Pencil, Undo2, Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { generarPdfMulta } from "@/lib/pdfMulta";
@@ -42,7 +42,7 @@ const PASOS: { id: Multa["estado"]; label: string }[] = [
   { id: "pagada", label: "Pagada" },
   { id: "cerrada", label: "Cerrada" },
 ];
-const MEDIOS = { correo: "por correo", pdf: "con PDF", manual: "a mano" } as const;
+const MEDIOS = { correo: "por correo", pdf: "con PDF", manual: "a mano" } as const; // "manual" solo para datos antiguos
 type Medio = keyof typeof MEDIOS;
 const ORIGENES: Record<string, string> = {
   pyramid: "Pyramid Consulting", multas_mediapro: "Multas Mediapro", dgt: "DGT", renting: "Renting", otro: "Otro",
@@ -71,13 +71,18 @@ function semaforo(m: Multa) {
   return { color: "var(--ok)", texto: `${d} días` };
 }
 
+/** Abre el correo en Outlook. Outlook separa los destinatarios con punto y coma. */
 function abrirCorreo(para: string[], cc: string[], asunto: string, cuerpo: string) {
-  const q = new URLSearchParams();
-  if (cc.length) q.set("cc", cc.join(","));
-  q.set("subject", asunto);
-  q.set("body", cuerpo.replace(/\n/g, "\r\n"));
-  window.location.href = `mailto:${para.join(",")}?${q.toString().replace(/\+/g, "%20")}`;
+  const partes = [
+    cc.length ? `cc=${cc.join(";")}` : "",
+    `subject=${encodeURIComponent(asunto)}`,
+    `body=${encodeURIComponent(cuerpo.replace(/\n/g, "\r\n"))}`,
+  ].filter(Boolean);
+  window.location.href = `mailto:${para.join(";")}?${partes.join("&")}`;
 }
+
+/** Despedida del correo: sin firma, para insertar la de Outlook (Insertar → Firma). */
+const DESPEDIDA = ["Un saludo,", ""];
 
 /** Problemas de los datos privados antes de comunicarlos. */
 function problemasPrivados(p: Privado | undefined) {
@@ -416,7 +421,7 @@ function FichaMulta({
   const [ocupado, setOcupado] = useState(false);
   const [aviso, setAviso] = useState<{ ok: boolean; m: string } | null>(null);
   const [medio, setMedio] = useState<Medio>("correo");
-  const [nota, setNota] = useState("");
+  const [volverA, setVolverA] = useState("");
   const supabase = createClient();
 
   // ¿Quién conducía? (salida con ese coche o adjudicación vigente)
@@ -443,7 +448,7 @@ function FichaMulta({
     setOcupado(false);
     if (error) return setAviso({ ok: false, m: error.message });
     setAviso({ ok: true, m: ok });
-    setTimeout(onCambio, 700);
+    onCambio();
   }
 
   async function verDoc(d: Doc) {
@@ -460,7 +465,7 @@ function FichaMulta({
       `DNI: ${priv?.dni ?? "[completar]"}`,
       `Dirección: ${priv?.direccion ?? "[completar]"}`, "",
       "Adjunto la notificación.", "",
-      "Un saludo,", miNombre,
+      ...DESPEDIDA,
     ].join("\n");
   }
   function textoConductor() {
@@ -470,16 +475,15 @@ function FichaMulta({
       `Importe: ${euros(m.importe)}${m.puntos ? ` · ${m.puntos} puntos` : ""}.`, "",
       "Recuerda que, si se paga dentro del plazo de pronto pago indicado en la notificación, suele tener un 50 % de descuento.",
       "Cuando la pagues, envíame por favor el justificante de pago.", "",
-      "Un saludo,", miNombre,
+      ...DESPEDIDA,
     ].join("\n");
   }
 
   /** Comunica la multa por el medio elegido y la marca como comunicada. */
   async function comunicar(via: "identificacion" | "paga_conductor") {
     if (!op) return;
-    if (medio === "manual" && !nota.trim()) return setAviso({ ok: false, m: "Indica cómo y a quién se lo has comunicado." });
     const cambios: Partial<Multa> = {
-      estado: "comunicada", via, fecha_comunicada: hoy(), medio_comunicacion: medio, nota_comunicacion: nota.trim() || null,
+      estado: "comunicada", via, fecha_comunicada: hoy(), medio_comunicacion: medio, nota_comunicacion: null,
     };
     if (medio === "correo") {
       if (via === "identificacion") abrirCorreo(contactos.para, contactos.cc, `Identificación de conductor · ${ref}`, textoIdentificacion());
@@ -517,7 +521,7 @@ function FichaMulta({
     const cuerpo = [
       "Hola,", "",
       `Adjunto el justificante de pago de ${descMulta}${op ? `, abonada por ${nombreCompleto(op)}` : ""}${m.fecha_pago ? ` el ${fecha(m.fecha_pago)}` : ""}.`, "",
-      "Un saludo,", miNombre,
+      ...DESPEDIDA,
     ].join("\n");
     abrirCorreo(contactos.para, contactos.cc, `Justificante de pago · ${ref}`, cuerpo);
     actualizar({ estado: "cerrada", fecha_cierre: hoy() }, "Multa cerrada.");
@@ -535,22 +539,21 @@ function FichaMulta({
     await actualizar({ estado: "pagada", fecha_pago: pago.fecha }, "Pago registrado.");
   }
 
-  /** Vuelve la multa al paso anterior y limpia los datos de ese paso. */
-  function deshacer() {
-    const previo = (): Multa["estado"] => {
-      if (m.estado === "identificado") return "recibida";
-      if (m.estado === "comunicada") return "identificado";
-      if (m.estado === "pagada") return "comunicada";
-      if (m.fecha_pago) return "pagada";
-      if (m.fecha_comunicada) return "comunicada";
-      return m.operador_id ? "identificado" : "recibida";
-    };
-    const a = previo();
-    const cambios: Partial<Multa> = { estado: a, fecha_cierre: null };
-    if (a === "recibida") Object.assign(cambios, { operador_id: null, conductor_origen: null, fecha_identificado: null });
-    if (a === "identificado") Object.assign(cambios, { via: null, fecha_comunicada: null, medio_comunicacion: null, nota_comunicacion: null });
-    if (a === "comunicada") Object.assign(cambios, { fecha_pago: null });
-    actualizar(cambios, `Multa devuelta a «${PASOS.find((p) => p.id === a)?.label}».`);
+  /** Pasos a los que se puede volver (anteriores al actual). */
+  const pasosPrevios = (() => {
+    const actual = m.estado === "anulada" ? PASOS.length : PASOS.findIndex((p) => p.id === m.estado);
+    return PASOS.slice(0, actual);
+  })();
+
+  /** Vuelve la multa al paso elegido y borra los datos de los pasos posteriores. */
+  function volver(destino: Multa["estado"]) {
+    const orden = PASOS.findIndex((p) => p.id === destino);
+    const cambios: Partial<Multa> = { estado: destino, fecha_cierre: null };
+    if (orden < 3) Object.assign(cambios, { fecha_pago: null });
+    if (orden < 2) Object.assign(cambios, { via: null, fecha_comunicada: null, medio_comunicacion: null, nota_comunicacion: null });
+    if (orden < 1) Object.assign(cambios, { operador_id: null, conductor_origen: null, fecha_identificado: null });
+    setVolverA("");
+    actualizar(cambios, `Multa devuelta a «${PASOS[orden].label}».`);
   }
 
   /** Borra la multa, sus documentos y los archivos guardados (solo administrador). */
@@ -670,18 +673,12 @@ function FichaMulta({
         <fieldset className="card p-4 space-y-3">
           <legend className="px-1 text-sm font-semibold flex items-center gap-1.5"><Mail size={15} /> Comunicar</legend>
           <Segmentos etiqueta="Medio" valor={medio} onChange={setMedio} opciones={[
-            { id: "correo", label: "Correo" }, { id: "pdf", label: "PDF" }, { id: "manual", label: "A mano" },
+            { id: "correo", label: "Correo" }, { id: "pdf", label: "PDF" },
           ]} />
           {medio === "correo" && <p className="text-xs text-muted">Se abre el correo en Outlook con el texto preparado. Adjunta la notificación (botón de arriba).</p>}
           {medio === "pdf" && <p className="text-xs text-muted">Se descarga un PDF con los datos de la multa y del conductor, listo para enviar o imprimir. Queda guardado en la ficha.</p>}
-          {medio === "manual" && (
-            <Campo label="¿Cómo y a quién?">
-              <textarea className="input !h-20 py-2" value={nota} onChange={(e) => setNota(e.target.value)}
-                placeholder="Ej.: por teléfono a Cristina (Pyramid); en mano al conductor…" />
-            </Campo>
-          )}
           <button className="btn btn-primary w-full" disabled={ocupado} onClick={() => comunicar("identificacion")}>
-            {medio === "correo" ? <Mail size={17} /> : medio === "pdf" ? <FileDown size={17} /> : <Hand size={17} />}
+            {medio === "correo" ? <Mail size={17} /> : <FileDown size={17} />}
             Identificar a Pyramid + Multas
           </button>
           <button className="btn btn-ghost w-full" disabled={ocupado} onClick={() => comunicar("paga_conductor")}>
@@ -732,11 +729,20 @@ function FichaMulta({
         <button className="btn btn-ghost !min-h-9 text-sm" disabled={ocupado} onClick={onEditar}>
           <Pencil size={15} /> Editar datos
         </button>
-        {m.estado !== "recibida" && (
-          <button className="btn btn-ghost !min-h-9 text-sm" disabled={ocupado}
-            onClick={() => { if (confirm("¿Deshacer el último paso de esta multa?")) deshacer(); }}>
-            <Undo2 size={15} /> Deshacer último paso
-          </button>
+        {pasosPrevios.length > 0 && (
+          <label className="flex items-center gap-1.5 text-sm">
+            <Undo2 size={15} className="text-muted" />
+            <select className="input !min-h-9 !w-auto !text-sm" value={volverA} disabled={ocupado} aria-label="Volver a un paso anterior"
+              onChange={(e) => {
+                const d = e.target.value as Multa["estado"];
+                setVolverA(d);
+                if (d && confirm(`¿Volver la multa a «${PASOS.find((p) => p.id === d)?.label}»? Se borrarán los datos de los pasos posteriores.`)) volver(d);
+                else setVolverA("");
+              }}>
+              <option value="">Volver a…</option>
+              {pasosPrevios.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+          </label>
         )}
         {!["cerrada", "anulada"].includes(m.estado) && (
           <button className="btn btn-ghost !min-h-9 text-sm" disabled={ocupado}
